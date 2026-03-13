@@ -15,6 +15,11 @@ export const sendOTP = async (req, res) => {
       return res.status(404).json({ message: "Team not found" });
     }
 
+    // Normalize email: lowercase + only valid characters
+    let normalizedEmail = team.regMail.toLowerCase();
+    // Keep only lowercase letters, digits, and common email specials
+    normalizedEmail = normalizedEmail.replace(/[^a-z0-9@._-]/g, "");
+
     const otp = generateOTP();
     const expiresAt = new Date(Date.now() + 60 * 60 * 1000); // 1 hour expiry
 
@@ -22,13 +27,14 @@ export const sendOTP = async (req, res) => {
     team.otpExpiry = expiresAt;
     await team.save();
 
-    await sendOTPEmail(team.regMail, otp);
+    await sendOTPEmail(normalizedEmail, otp);
     res.status(200).json({ message: "OTP sent to registered email" });
   } catch (error) {
     console.error("Error in sendOTP:", error);
     res.status(500).json({ message: "Internal server error" });
   }
 };
+
 
 export const verifyOTP = async (req, res) => {
   const { kriyaID, otp } = req.body;
