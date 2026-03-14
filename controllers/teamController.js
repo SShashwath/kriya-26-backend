@@ -164,40 +164,44 @@ export const round2Answers = async (req, res) => {
     const team = await Team.findById(req.team._id);
     if (!team) return res.status(404).json({ msg: "Team not found" });
 
-    const selectedScrolls = team.round1.selectedScrolls;
+    const selectedScrolls = req.body.selectedScrolls;
     if (!selectedScrolls || selectedScrolls.length === 0) {
-      return res.status(400).json({ msg: "No scrolls selected in Round 1" });
+      return res.status(400).json({ msg: "No scrolls selected for Round 2" });
     }
 
     // Map each scroll to a Round 2 problem
     const problemsStatus = [];
-    const AlgorithmCard = (await import("../models/AlgorithmCard.js")).default;
+    const usedProblemIds = new Set();
+    const allQuestions = await Round2Question.find({});
+    
+    // Ensure we only process unique scrolls
+    const uniqueScrolls = [...new Set(selectedScrolls)];
     
     const shipConfig = getShipConfig(team.shipConfig);
     const initialLives = shipConfig ? shipConfig.round2Lives : 3;
 
-    for (const scroll of selectedScrolls) {
-      // Find the algorithm card by name to get its ID
-      const algo = await AlgorithmCard.findOne({ name: scroll.name });
-      if (!algo) {
-        console.error(`Algorithm card not found for name: ${scroll.name}`);
-        continue;
+    for (const scrollId of uniqueScrolls) {
+      // Find a problem that strictly matches this algorithm
+      let problem = allQuestions.find(q => 
+        Array.isArray(q.allowedAlgorithms) && 
+        q.allowedAlgorithms.map(String).includes(String(scrollId)) &&
+        !usedProblemIds.has(q._id.toString())
+      );
+
+      // Backfill: if no strict match, find any unused question
+      if (!problem) {
+        problem = allQuestions.find(q => !usedProblemIds.has(q._id.toString()));
       }
 
-      const problem = await Round2Question.findOne({
-        allowedAlgorithms: algo._id
-      });
-
       if (problem) {
+        usedProblemIds.add(problem._id.toString());
         problemsStatus.push({
           problemId: problem._id,
           livesLeft: initialLives,
-          bonusLives: 0, // Track extra lives from action cards separately
+          bonusLives: 0,
           wrongSubmissions: 0,
           status: "NOT_STARTED"
         });
-      } else {
-        console.warn(`No Round 2 problem found for algorithm: ${scroll.name} (${algo._id})`);
       }
     }
 
@@ -207,7 +211,18 @@ export const round2Answers = async (req, res) => {
         });
     }
 
-    team.round2.problemsStatus = problemsStatus;
+    // Merge new problems while preserving status of existing ones
+    const existingStatus = team.round2.problemsStatus || [];
+    const mergedStatus = [...existingStatus];
+
+    for (const newPs of problemsStatus) {
+      const exists = mergedStatus.find(p => String(p.problemId) === String(newPs.problemId));
+      if (!exists) {
+        mergedStatus.push(newPs);
+      }
+    }
+
+    team.round2.problemsStatus = mergedStatus;
     await team.save();
 
     res.json({
